@@ -65,7 +65,7 @@ service cloud.firestore {
     }
 
     match /config/appearance {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow write: if isAdmin();
     }
   }

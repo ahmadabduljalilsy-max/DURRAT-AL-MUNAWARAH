@@ -186,7 +186,7 @@ export default function App() {
       })) as RecipientRecord[];
       setRecipients(records);
     }, (err) => {
-      console.error("Firestore sync error:", err);
+      handleFirestoreError(err, OperationType.GET, 'recipients');
     });
     
     return () => unsubscribe();
@@ -200,6 +200,8 @@ export default function App() {
     const unsubscribe = onSnapshot(usersRef, (snapshot) => {
       const usersList = snapshot.docs.map(doc => doc.data() as AppUser);
       setAllUsers(usersList);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'users');
     });
     
     return () => unsubscribe();
@@ -218,6 +220,9 @@ export default function App() {
         if (data.primaryColor) root.style.setProperty('--color-brand-navy', data.primaryColor);
         if (data.secondaryColor) root.style.setProperty('--color-brand-gold', data.secondaryColor);
       }
+    }, (err) => {
+      // Appearance is allowed public read, but if it fails we just log it
+      console.warn("Appearance config not loaded or restricted:", err);
     });
     return () => unsubscribe();
   }, []);
