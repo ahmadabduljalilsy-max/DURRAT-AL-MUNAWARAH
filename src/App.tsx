@@ -431,18 +431,23 @@ export default function App() {
   }
 
   const handleLogin = async () => {
+    if (loggingIn) return;
     setLoggingIn(true);
     setAuthError(null);
     try {
       await signInWithGoogle();
     } catch (err: any) {
-      console.error("Login error:", err);
+      console.error("Login error detail:", err);
       if (err.code === 'auth/popup-closed-by-user') {
-        setAuthError('تم إغلاق نافذة تسجيل الدخول من قبلك. يرجى المحاولة مرة أخرى.');
+        setAuthError('تم إغلاق نافذة الدخول قبل إتمام العملية. يرجى محاولة فتحها مرة أخرى وعدم إغلاقها حتى انتهاء تسجيل الدخول.');
+      } else if (err.code === 'auth/popup-blocked') {
+        setAuthError('يبدو أن متصفحك يمنع النوافذ المنبثقة. يرجى السماح بالنوافذ المنبثقة لهذا الموقع للمتابعة.');
       } else if (err.code === 'auth/cancelled-by-user') {
-        setAuthError('تم إلغاء عملية تسجيل الدخول.');
+        setAuthError('تم إلغاء عملية تسجيل الدخول من قبل المستخدم.');
+      } else if (err.code === 'auth/internal-error') {
+        setAuthError('حدث خطأ داخلي في نظام Google. يرجى المحاولة مرة أخرى بعد قليل.');
       } else {
-        setAuthError('فشل تسجيل الدخول. تأكد من اتصالك بالإنترنت وحاول مرة أخرى.');
+        setAuthError('فشل تسجيل الدخول. تأكد من اتصالك بالإنترنت وحاول مرة أخرى. (رمز الخطأ: ' + (err.code || 'unknown') + ')');
       }
     } finally {
       setLoggingIn(false);
@@ -527,6 +532,18 @@ export default function App() {
                   </span>
                 </div>
               </button>
+
+              {authError && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="pt-2"
+                >
+                  <p className="text-[11px] text-gray-400 font-bold">
+                    هل تواجه مشكلة في تسجيل الدخول؟ جرب <a href={window.location.href} target="_blank" rel="noopener noreferrer" className="text-brand-gold underline hover:text-brand-gold/80 transition-colors">فتح المنصة في نافذة جديدة</a> لتجاوز قيود المتصفح.
+                  </p>
+                </motion.div>
+              )}
 
               <div className="flex items-center justify-center gap-2 pt-6">
                  <ShieldCheck className="w-4 h-4 text-emerald-500" />
