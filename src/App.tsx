@@ -94,6 +94,8 @@ export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [userData, setUserData] = useState<AppUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   
   const [pdfPages, setPdfPages] = useState<PDFPage[] | null>(null);
   const [originalFile, setOriginalFile] = useState<File | null>(null);
@@ -148,7 +150,7 @@ export default function App() {
             setUserData(userDoc.data() as AppUser);
           } else {
             // New User
-            const isDefaultAdmin = firebaseUser.email === ADMIN_EMAIL;
+            const isDefaultAdmin = firebaseUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
             const newUserData: AppUser = {
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
@@ -428,32 +430,118 @@ export default function App() {
     );
   }
 
+  const handleLogin = async () => {
+    setLoggingIn(true);
+    setAuthError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      console.error("Login error:", err);
+      if (err.code === 'auth/popup-closed-by-user') {
+        setAuthError('تم إغلاق نافذة تسجيل الدخول من قبلك. يرجى المحاولة مرة أخرى.');
+      } else if (err.code === 'auth/cancelled-by-user') {
+        setAuthError('تم إلغاء عملية تسجيل الدخول.');
+      } else {
+        setAuthError('فشل تسجيل الدخول. تأكد من اتصالك بالإنترنت وحاول مرة أخرى.');
+      }
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
   // --- Auth Pages ---
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-navy p-4 font-sans">
+      <div className="min-h-screen flex items-center justify-center bg-brand-navy p-4 font-sans relative overflow-hidden">
+        {/* Animated Background Elements */}
+        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-brand-gold/5 rounded-full blur-[120px] -translate-y-1/2 translate-x-1/4"></div>
+        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-brand-gold/10 rounded-full blur-[100px] translate-y-1/2 -translate-x-1/4"></div>
+        
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full border-4 border-brand-gold text-center"
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="bg-white rounded-[3rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)] max-w-lg w-full border-b-[12px] border-brand-gold relative overflow-hidden"
         >
-          <div className="w-20 h-20 bg-brand-navy rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl overflow-hidden p-2">
-            {appearance.logoUrl ? (
-              <img src={appearance.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" />
-            ) : (
-              <Building2 className="w-10 h-10 text-white" />
-            )}
+          {/* Top Decorative bar */}
+          <div className="absolute top-0 left-0 right-0 h-2 bg-brand-gold/20 flex gap-1">
+             {[...Array(20)].map((_, i) => <div key={i} className="flex-1 h-full bg-brand-gold/40"></div>)}
           </div>
-          <h1 className="text-2xl font-black text-brand-navy mb-2">{appearance.appName}</h1>
-          <p className="text-gray-500 mb-8 text-sm">يرجى تسجيل الدخول للوصول إلى نظام إدارة البطاقات</p>
-          <button 
-            onClick={signInWithGoogle}
-            className="w-full flex items-center justify-center gap-3 bg-brand-navy text-white py-4 rounded-xl font-bold hover:bg-brand-navy/90 transition-all active:scale-95 shadow-xl border-2 border-brand-gold"
-          >
-            <LogIn className="w-5 h-5 text-brand-gold" />
-            الدخول عبر حساب Google
-          </button>
+
+          <div className="p-12 md:p-16 text-center">
+            <div className="relative inline-block mb-10">
+              <div className="w-28 h-28 bg-brand-navy rounded-[2.5rem] flex items-center justify-center mx-auto shadow-2xl relative z-10 p-5 group overflow-hidden">
+                <div className="absolute inset-0 bg-brand-gold/20 translate-y-full group-hover:translate-y-0 transition-transform duration-500"></div>
+                {appearance.logoUrl ? (
+                  <img src={appearance.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain relative z-20" referrerPolicy="no-referrer" />
+                ) : (
+                  <Building2 className="w-12 h-12 text-white relative z-20" />
+                )}
+              </div>
+              <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-brand-gold rounded-2xl flex items-center justify-center shadow-xl z-20 border-4 border-white">
+                <Lock className="w-4 h-4 text-brand-navy" />
+              </div>
+            </div>
+
+            <h1 className="text-3xl font-black text-brand-navy mb-3 tracking-tight">{appearance.appName}</h1>
+            <p className="text-gray-400 font-bold mb-10 text-[10px] uppercase tracking-[0.3em]">Secure Employee Portal | v2.5.0</p>
+            
+            <div className="space-y-6">
+              <div className="bg-brand-gray/50 p-6 rounded-3xl border border-brand-navy/5 text-right">
+                <p className="text-[11px] text-brand-navy/60 font-bold leading-relaxed">
+                  مرحباً بك في المنصة الرقمية الموحدة لشركة درة المنورة. يرجى استخدام بريدك الإلكتروني المعتمد للدخول إلى النظام والبدء في إدارة الكشوفات.
+                </p>
+              </div>
+
+              {authError && (
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="p-5 bg-red-50 border-2 border-red-100 rounded-2xl text-red-600 text-xs font-black flex items-center gap-3 text-right"
+                >
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>{authError}</span>
+                </motion.div>
+              )}
+
+              <button 
+                onClick={handleLogin}
+                disabled={loggingIn || authLoading}
+                className="w-full relative group"
+              >
+                <div className="absolute -inset-0.5 bg-brand-gold rounded-2xl blur opacity-30 group-hover:opacity-60 transition duration-500"></div>
+                <div className="relative w-full flex items-center justify-center gap-4 bg-brand-navy text-white px-8 py-5 rounded-2xl font-black text-lg hover:bg-brand-navy/95 transition-all active:scale-95 shadow-2xl border border-white/10 overflow-hidden">
+                   {loggingIn ? (
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                    >
+                      <Loader2 className="w-6 h-6 text-brand-gold" />
+                    </motion.div>
+                  ) : (
+                    <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center shrink-0">
+                      <LogIn className="w-5 h-5 text-brand-gold transition-transform group-hover:translate-x-1" />
+                    </div>
+                  )}
+                  <span className="flex-1 text-center pr-2">
+                    {loggingIn ? 'جاري التحقق...' : 'الدخول عبر خدمة Google'}
+                  </span>
+                </div>
+              </button>
+
+              <div className="flex items-center justify-center gap-2 pt-6">
+                 <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                 <span className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">End-to-End Encrypted Authentication</span>
+              </div>
+            </div>
+          </div>
         </motion.div>
+        
+        {/* Version info footer */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 opacity-30">
+           <div className="h-px w-8 bg-white"></div>
+           <span className="text-[10px] text-white font-mono tracking-tighter">POWERED BY GEMINI ENGINE v1.5</span>
+           <div className="h-px w-8 bg-white"></div>
+        </div>
       </div>
     );
   }
