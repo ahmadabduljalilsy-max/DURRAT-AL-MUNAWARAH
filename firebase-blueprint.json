@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "App user with role and approval status",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "status": { "type": "string", "enum": ["pending", "approved"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fullName", "email", "role", "status", "createdAt"]
+    },
+    "Recipient": {
+      "title": "Recipient",
+      "description": "Logged recipient of a driver card/ID",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "idNumber": { "type": "string" },
+        "idType": { "type": "string" },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" },
+        "createdByEmail": { "type": "string" },
+        "createdByName": { "type": "string" }
+      },
+      "required": ["fullName", "idNumber", "idType", "receivedAt", "createdBy"]
+    },
+    "AppConfig": {
+      "title": "App Appearance Config",
+      "description": "Global settings for colors and branding",
+      "type": "object",
+      "properties": {
+        "primaryColor": { "type": "string" },
+        "secondaryColor": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "appName": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "recipients/{recipientId}": {
+      "schema": "Recipient",
+      "description": "Centralized logs of recipients"
+    },
+    "config/appearance": {
+      "schema": "AppConfig",
+      "description": "Global application branding configuration"
+    }
+  }
+}

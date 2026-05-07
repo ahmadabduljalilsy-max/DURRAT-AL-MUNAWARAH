@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        request.auth.token.email == 'ahmad.abduljalil.sy@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isApproved() {
+      return isEmailVerified() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved';
+    }
+
+    function isValidUser(data) {
+      return data.fullName is string && data.fullName.size() <= 200 &&
+             data.email is string && data.email == request.auth.token.email &&
+             data.role in ['admin', 'user'] &&
+             data.status in ['pending', 'approved'];
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      
+      allow create: if isSignedIn() && request.auth.uid == userId && 
+                      isValidUser(request.resource.data) &&
+                      (
+                        (request.resource.data.status == 'pending' && request.resource.data.role == 'user') ||
+                        (request.auth.token.email == 'ahmad.abduljalil.sy@gmail.com' && request.resource.data.status == 'approved' && request.resource.data.role == 'admin')
+                      );
+                      
+      allow update: if isAdmin() || (
+        isSignedIn() && request.auth.uid == userId &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fullName'])
+      );
+
+      allow delete: if isAdmin() || (isSignedIn() && request.auth.uid == userId && resource.data.status == 'pending');
+    }
+
+    match /recipients/{recipientId} {
+      allow read: if isAdmin() || isApproved();
+      allow create: if (isAdmin() || isApproved()) && 
+                      request.resource.data.createdBy == request.auth.uid &&
+                      request.resource.data.receivedAt == request.time;
+      allow update, delete: if isAdmin();
+    }
+
+    match /config/appearance {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}
