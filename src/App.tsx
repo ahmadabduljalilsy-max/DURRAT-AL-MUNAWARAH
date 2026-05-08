@@ -240,34 +240,38 @@ export default function App() {
         setFileName(data.fileName || null);
         setLastUploadedBy(data.uploadedByEmail || null);
         
-        // If pages are still in the main doc (old format), use them
-        if (data.pages && data.pages.length > 0) {
-          console.log("Using pages from metadata (old format)");
-          setPdfPages(data.pages);
-        }
+        const currentSessionId = data.sessionId;
+
+        // Sync Pages (Filtered by session ID if available)
+        const unsubPages = onSnapshot(pdfContentRef, (snapshot) => {
+          if (!snapshot.empty) {
+            let pages = snapshot.docs
+              .map(d => d.data() as PDFPage & { sessionId?: string })
+              .filter(p => !currentSessionId || p.sessionId === currentSessionId)
+              .sort((a, b) => a.pageNumber - b.pageNumber);
+            
+            // If we have no pages for the current session, maybe it was the old format
+            if (pages.length === 0 && data.pages && data.pages.length > 0) {
+              console.log("Using pages from legacy metadata format");
+              pages = data.pages;
+            }
+
+            if (pages.length > 0) {
+              console.log("PDF Pages Synced:", pages.length);
+              setPdfPages(pages);
+            }
+          }
+        }, (err) => {
+          console.warn("Global PDF pages sync error:", err);
+        });
+
+        return () => unsubPages();
       }
     }, (err) => {
       console.warn("Global PDF metadata sync error:", err);
     });
 
-    // Sync Pages (New format - subcollection)
-    const unsubPages = onSnapshot(pdfContentRef, (snapshot) => {
-      if (!snapshot.empty) {
-        const pages = snapshot.docs
-          .map(d => d.data() as PDFPage)
-          .sort((a, b) => a.pageNumber - b.pageNumber);
-        
-        console.log("PDF Pages Synced from subcollection:", pages.length);
-        setPdfPages(pages);
-      }
-    }, (err) => {
-      console.warn("Global PDF pages sync error:", err);
-    });
-
-    return () => {
-      unsubMeta();
-      unsubPages();
-    };
+    return () => unsubMeta();
   }, [userData]);
 
   // Appearance Sync
@@ -326,35 +330,66 @@ export default function App() {
         throw new Error("لم يتم العثور على أي نص في الملف. قد يكون الملف عبارة عن صور فقط أو محمي.");
       }
       
-      // Save metadata to Firestore
+      // Save metadata to Firestore with a new session ID
+      const sessionId = Date.now().toString();
       const pdfDataRef = doc(db, 'config', 'pdf_data');
-      await setDoc(pdfDataRef, {
-        fileName: file.name,
-        uploadedAt: serverTimestamp(),
-        uploadedBy: user?.uid,
-        uploadedByEmail: user?.email,
-        pages: null // Important: Clear old pages from the main doc to avoid size issues
-      });
+      
+      try {
+        await setDoc(pdfDataRef, {
+          fileName: file.name,
+          uploadedAt: serverTimestamp(),
+          uploadedBy: user?.uid,
+          uploadedByEmail: user?.email,
+          sessionId: sessionId,
+          pages: null // Clear old format
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, 'config/pdf_data');
+      }
 
-      // Save pages to subcollection
-      setExtractStatus('جاري مزامنة الصفحات مع الخادم...');
-      const batch = writeBatch(db);
+      // Save pages to subcollection in chunks
       const pdfContentRef = collection(db, 'config', 'pdf_data', 'pdf_content');
+      const CHUNK_SIZE = 50;
       
-      // For each page, create a doc in the subcollection
-      // We use pageNumber as ID for easy replacement
-      pages.forEach((page) => {
-        const pageDocRef = doc(pdfContentRef, `page_${page.pageNumber}`);
-        batch.set(pageDocRef, page);
-      });
-      
-      await batch.commit();
+      for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
+        setExtractStatus(`جاري مزامنة الصفحات... (${Math.min(i + CHUNK_SIZE, pages.length)}/${pages.length})`);
+        const chunk = pages.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        
+        chunk.forEach((page) => {
+          const pageDocRef = doc(pdfContentRef, `page_${page.pageNumber}`);
+          batch.set(pageDocRef, {
+            ...page,
+            sessionId: sessionId,
+            updatedAt: serverTimestamp()
+          });
+        });
+        
+        try {
+          await batch.commit();
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, 'config/pdf_data/pdf_content');
+        }
+      }
 
       setPdfPages(pages);
       setExtractStatus('اكتملت المعالجة والمزامنة بنجاح!');
-    } catch (err) {
-      console.error("Upload error:", err);
-      setError('فشل في معالجة أو مزامنة الملف مع الخادم. ربما يكون الملف كبيراً جداً أو هناك مشكلة في الاتصال.');
+    } catch (err: any) {
+      console.error("Detailed upload error:", err);
+      let errorMsg = 'فشل في معالجة أو مزامنة الملف مع الخادم.';
+      
+      try {
+        const parsedError = JSON.parse(err.message);
+        if (parsedError.error?.includes('quota')) {
+          errorMsg = 'تم تجاوز حصة البيانات المسموح بها للمشروع.';
+        } else if (parsedError.error?.includes('permission')) {
+          errorMsg = 'ليس لديك صلاحية كافية لرفع الكشوفات.';
+        }
+      } catch {
+        // Not a JSON error
+      }
+      
+      setError(`${errorMsg} (ربما يكون الملف كبيراً جداً أو هناك مشكلة في الاتصال)`);
     } finally {
       setTimeout(() => setIsExtracting(false), 800);
     }

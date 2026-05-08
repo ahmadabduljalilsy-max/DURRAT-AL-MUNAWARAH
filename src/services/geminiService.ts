@@ -13,11 +13,18 @@ export interface DriverData {
 
 /**
  * Normalizes Arabic text for more flexible matching
- * Strips diacritics and normalizes Alifs, Yaas, and Hehs
  */
 function normalizeArabic(text: string): string {
   if (!text) return "";
-  return text
+  
+  // Convert Eastern Arabic digits to standard
+  const easternDigits = ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"];
+  let normalized = text;
+  for (let i = 0; i < 10; i++) {
+    normalized = normalized.replace(new RegExp(easternDigits[i], "g"), i.toString());
+  }
+
+  return normalized
     .replace(/[\u064B-\u0652]/g, "") // Strip Tashkeel
     .replace(/[أإآ]/g, "ا")
     .replace(/ة/g, "ه")
@@ -66,23 +73,28 @@ export async function findDriverInText(query: string, pages: { text: string; pag
   }
 
   const prompt = `
-    You are the "ULTRA-ADVANCED AI Search Engine" for finding driver records.
+    You are the "ULTRA-ADVANCED AI Search Engine" optimized for Arabic tabular PDF records.
     TARGET QUERY: "${query}"
 
-    SEARCH STRATEGY:
-    1. SMARTER ARABIC MATCHING: Use semantic matching for Arabic names. Ignore Alif variation (أ/ا/إ), Taa Marbouta (ة/ه), and Yaa (ي/ى).
-    2. KEYWORD SPOTTING: Look closely for characters that match parts of "${query}".
-    3. COLUMN DETECTION: This is a tabular list. The ID is usually 10 digits. The name is usually multiple Arabic words.
-    4. PARTIAL MATCHING: If the query is "Ali", match "Ali Ahmed" or "Mohamed Ali".
-    5. DATA EXTRACTION: If you find a matching row, extract ALL columns.
+    SEARCH STRATEGY & RULES:
+    1. ARABIC SEMANTIC MATCHING: Normalize all Arabic text. Ali/أحمد matches احمد/علي. Look for name components.
+    2. KEYWORD & PARTIALS: If the query is numeric (ID), look for it precisely, but also account for missing digits or OCR digit mapping (e.g., ٧ to 7).
+    3. TABULAR SCANNING: The data is in a row-based format. Identify rows where either the Name or the ID matches the query.
+    4. CONFIDENCE: Only return found:true if you can clearly identify a record matching ${query}. 
+    5. DATA COMPLETENESS: If a record is found, you MUST attempt to fill all fields from the surrounding row data.
 
-    DATA SOURCE (RELEVANT PAGES ONLY):
+    SEARCH CONTEXT (RELEVANT DATA HIGHLIGHTS):
     ${JSON.stringify(finalCandidatePages)}
 
-    RESPONSE REQUIREMENTS:
-    - found: true ONLY if you are highly confident, false otherwise.
-    - idType: "رقم إقامة", "رقم حدود", or "هوية وطنية".
-    - pageNumber: Use the exact pageNumber from the source object.
+    RESPONSE FORMAT (JSON ONLY):
+    {
+      "fullName": "Name from record",
+      "idNumber": "10-digit ID",
+      "idType": "رقم إقامة | رقم حدود | هوية وطنية",
+      "expiryDate": "Date from record (Format: YYYY/MM/DD)",
+      "pageNumber": [Exact page number where found],
+      "found": true/false
+    }
   `;
 
   try {
