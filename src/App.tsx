@@ -349,7 +349,7 @@ export default function App() {
 
       // Save pages to subcollection in chunks
       const pdfContentRef = collection(db, 'config', 'pdf_data', 'pdf_content');
-      const CHUNK_SIZE = 50;
+      const CHUNK_SIZE = 10; // Stay under 20 lookups per batch limit
       
       for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
         setExtractStatus(`جاري مزامنة الصفحات... (${Math.min(i + CHUNK_SIZE, pages.length)}/${pages.length})`);
@@ -943,11 +943,11 @@ export default function App() {
                   <div className="bg-white rounded-[2rem] p-8 shadow-xl shadow-brand-navy/5 border border-white/60">
                     <h3 className="text-sm font-black text-brand-navy uppercase tracking-[0.2em] mb-6 flex items-center gap-3">
                       <div className="w-2 h-6 bg-brand-gold rounded-full"></div>
-                      {userData?.role === 'admin' ? 'تحديث قاعدة البيانات' : 'قاعدة البيانات المزامنة'}
+                      تحديث قاعدة البيانات
                     </h3>
 
-                    {userData?.role === 'admin' ? (
-                      // Admin Upload Interface
+                    {userData ? (
+                      // Admin/Employee Upload Interface
                       !pdfPages ? (
                         <div className="space-y-6">
                           <label className={`relative block border-4 border-dashed rounded-[2.5rem] cursor-pointer transition-all duration-500 overflow-hidden ${
@@ -1065,35 +1065,10 @@ export default function App() {
                         </div>
                       )
                     ) : (
-                      // Regular User View
-                      fileName ? (
-                        <div className={`border-2 rounded-3xl p-6 transition-all ${!pdfPages || pdfPages.length === 0 ? 'bg-red-50 border-red-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
-                           <div className="flex items-center gap-5">
-                              <div className={`w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl border rotate-3 ${!pdfPages || pdfPages.length === 0 ? 'border-red-100' : 'border-emerald-100'}`}>
-                                 {!pdfPages || pdfPages.length === 0 ? <AlertCircle className="w-8 h-8 text-red-500" /> : <FileText className="w-8 h-8 text-brand-navy" />}
-                              </div>
-                              <div className="flex-1 overflow-hidden">
-                                 <span className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${!pdfPages || pdfPages.length === 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                                   {!pdfPages || pdfPages.length === 0 ? 'خطأ في مزامنة البيانات' : 'Active Scan Document'}
-                                 </span>
-                                 <h4 className="text-brand-navy font-black text-lg truncate">{fileName}</h4>
-                                 <div className="flex items-center gap-2 mt-2">
-                                    <div className={`w-2 h-2 rounded-full ${!pdfPages || pdfPages.length === 0 ? 'bg-red-500' : 'bg-emerald-500 animate-ping'}`}></div>
-                                    <span className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">
-                                      {!pdfPages || pdfPages.length === 0 ? 'يرجى الطلب من المدير إعادة رفع الملف' : `Synced with server | ${lastUploadedBy}`}
-                                    </span>
-                                 </div>
-                              </div>
-                           </div>
-                        </div>
-                      ) : (
-                        <div className="p-10 bg-gray-50/50 border-4 border-dashed border-gray-100 rounded-[2.5rem] text-center">
-                           <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
-                              <Clock className="w-8 h-8 text-gray-200 animate-pulse" />
-                           </div>
-                           <p className="text-gray-400 font-bold text-sm">بانتظار قيام المدير برفع كشف الـ PDF اليومي للبدء في عمليات المطابقة...</p>
-                        </div>
-                      )
+                      // Fallback for unexpected state
+                      <div className="p-10 bg-gray-50/50 border-4 border-dashed border-gray-100 rounded-[2.5rem] text-center">
+                         <p className="text-gray-400 font-bold text-sm">يرجى تسجيل الدخول للبدء...</p>
+                      </div>
                     )}
                   </div>
                 </div>
