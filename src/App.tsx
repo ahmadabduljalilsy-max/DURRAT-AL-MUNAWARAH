@@ -378,8 +378,9 @@ export default function App() {
 
     try {
       // Simulate phases for "Premium" feel and visual feedback
-      setTimeout(() => setSearchStage('تحليل الكشوفات والبيانات...'), 800);
-      setTimeout(() => setSearchStage('مطابقة الهوية الرقمية...'), 1600);
+      setTimeout(() => setSearchStage('تحليل الكشوفات والبيانات بالذكاء الاصطناعي...'), 400);
+      setTimeout(() => setSearchStage('فرز الصفحات وتحديد الكلمات المفتاحية...'), 1200);
+      setTimeout(() => setSearchStage('استخراج السجل ومطابقة الهوية الرقمية...'), 2000);
       
       const result = await findDriverInText(searchQuery, pdfPages);
       
@@ -1112,6 +1113,7 @@ export default function App() {
                       <div className="flex flex-wrap gap-3">
                          <span className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-[10px] text-white/40 font-bold uppercase tracking-widest">NORMALIZATION_ON</span>
                          <span className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-[10px] text-white/40 font-bold uppercase tracking-widest">FUZZY_MATCH_READY</span>
+                         <span className="px-4 py-2 bg-brand-gold/20 border border-brand-gold/30 rounded-full text-[10px] text-brand-gold font-black uppercase tracking-widest animate-pulse">ULTRA_ENGINE_V2</span>
                       </div>
                     </div>
                   </div>
