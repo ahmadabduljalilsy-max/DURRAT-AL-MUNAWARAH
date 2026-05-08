@@ -72,6 +72,11 @@ service cloud.firestore {
     match /config/pdf_data {
       allow read: if isApproved() || isAdmin();
       allow write: if isAdmin();
+      
+      match /pdf_content/{pageId} {
+        allow read: if isApproved() || isAdmin();
+        allow write: if isAdmin();
+      }
     }
   }
 }

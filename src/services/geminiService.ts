@@ -24,7 +24,11 @@ export async function findDriverInText(query: string, pages: { text: string; pag
     5. PAGE TRACKING: Accurately identify the page number where this specific driver's record exists.
 
     DATA SOURCE (JSON Pages):
-    ${JSON.stringify(pages).substring(0, 50000)}
+    ${(() => {
+      const json = JSON.stringify(pages);
+      console.log("Sending data to Gemini, total JSON size:", json.length, "chars. Truncating to 300k if needed.");
+      return json.substring(0, 300000);
+    })()}
 
     RESPONSE REQUIREMENTS:
     - If found, set found: true and fill all fields.
@@ -53,10 +57,18 @@ export async function findDriverInText(query: string, pages: { text: string; pag
       }
     });
 
-    const jsonStr = response.text?.trim() || "{\"found\": false}";
-    return JSON.parse(jsonStr);
+    const jsonStr = response.text?.trim();
+    if (!jsonStr) {
+      console.warn("Empty response from Gemini");
+      return { found: false } as DriverData;
+    }
+    
+    const result = JSON.parse(jsonStr);
+    console.log("Search Result for query:", query, "=>", result.found ? "FOUND" : "NOT_FOUND");
+    return result;
   } catch (error) {
-    console.error("Gemini Error:", error);
+    console.error("Gemini Search Execution Error:", error);
+    // If it's a context overflow or similar, maybe returning something else would help, but for now we just fail gracefully
     return { found: false } as DriverData;
   }
 }

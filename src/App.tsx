@@ -48,7 +48,8 @@ import {
   updateDoc,
   deleteDoc,
   Timestamp,
-  getDocFromServer
+  getDocFromServer,
+  writeBatch
 } from 'firebase/firestore';
 
 // --- Types ---
@@ -142,15 +143,15 @@ export default function App() {
           const userDocRef = doc(db, 'users', firebaseUser.uid);
           
           // Use getDocFromServer for the initial user fetch to ensure freshness and reliability
-          let userDoc;
+          let userDoc = null;
           try {
             userDoc = await getDocFromServer(userDocRef);
           } catch (e) {
-            // Fallback to regular getDoc if server-get fails (could be transient)
+            console.warn("Server doc fetch failed, falling back to cache:", e);
             userDoc = await getDoc(userDocRef);
           }
           
-          if (userDoc.exists()) {
+          if (userDoc && userDoc.exists()) {
             const currentData = userDoc.data() as AppUser;
             const userEmail = firebaseUser.email?.toLowerCase() || '';
             const isTargetAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === userEmail);
@@ -230,18 +231,43 @@ export default function App() {
     if (!userData || userData.status !== 'approved') return;
 
     const pdfDataRef = doc(db, 'config', 'pdf_data');
-    const unsubscribe = onSnapshot(pdfDataRef, (docSnap) => {
+    const pdfContentRef = collection(db, 'config', 'pdf_data', 'pdf_content');
+
+    // Sync Metadata
+    const unsubMeta = onSnapshot(pdfDataRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setPdfPages(data.pages || null);
         setFileName(data.fileName || null);
         setLastUploadedBy(data.uploadedByEmail || null);
+        
+        // If pages are still in the main doc (old format), use them
+        if (data.pages && data.pages.length > 0) {
+          console.log("Using pages from metadata (old format)");
+          setPdfPages(data.pages);
+        }
       }
     }, (err) => {
-      console.warn("Global PDF data sync restriction:", err);
+      console.warn("Global PDF metadata sync error:", err);
     });
 
-    return () => unsubscribe();
+    // Sync Pages (New format - subcollection)
+    const unsubPages = onSnapshot(pdfContentRef, (snapshot) => {
+      if (!snapshot.empty) {
+        const pages = snapshot.docs
+          .map(d => d.data() as PDFPage)
+          .sort((a, b) => a.pageNumber - b.pageNumber);
+        
+        console.log("PDF Pages Synced from subcollection:", pages.length);
+        setPdfPages(pages);
+      }
+    }, (err) => {
+      console.warn("Global PDF pages sync error:", err);
+    });
+
+    return () => {
+      unsubMeta();
+      unsubPages();
+    };
   }, [userData]);
 
   // Appearance Sync
@@ -264,10 +290,21 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Handle PDF Upload
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle PDF Upload / Re-link
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isRelink = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (isRelink) {
+      if (file.name !== fileName) {
+        setError(`الملف المختار (${file.name}) لا يطابق الملف المرفوع حالياً (${fileName}). يرجى اختيار الملف الصحيح.`);
+        return;
+      }
+      setOriginalFile(file);
+      setSuccess("تم ربط الملف الأصلي محلياً بنجاح. يمكنك الآن طباعة الصفحات الأصلية.");
+      setTimeout(() => setSuccess(null), 4000);
+      return;
+    }
 
     setIsExtracting(true);
     setExtractProgress(0);
@@ -284,22 +321,40 @@ export default function App() {
         else if (p < 90) setExtractStatus('تحسين جودة البيانات المستخرجة...');
         else setExtractStatus('جارِ الانتهاء من المعالجة...');
       });
+
+      if (!pages || pages.length === 0) {
+        throw new Error("لم يتم العثور على أي نص في الملف. قد يكون الملف عبارة عن صور فقط أو محمي.");
+      }
       
-      // Save to Firestore so everyone can see it
+      // Save metadata to Firestore
       const pdfDataRef = doc(db, 'config', 'pdf_data');
       await setDoc(pdfDataRef, {
-        pages,
         fileName: file.name,
         uploadedAt: serverTimestamp(),
         uploadedBy: user?.uid,
-        uploadedByEmail: user?.email
+        uploadedByEmail: user?.email,
+        pages: null // Important: Clear old pages from the main doc to avoid size issues
       });
+
+      // Save pages to subcollection
+      setExtractStatus('جاري مزامنة الصفحات مع الخادم...');
+      const batch = writeBatch(db);
+      const pdfContentRef = collection(db, 'config', 'pdf_data', 'pdf_content');
+      
+      // For each page, create a doc in the subcollection
+      // We use pageNumber as ID for easy replacement
+      pages.forEach((page) => {
+        const pageDocRef = doc(pdfContentRef, `page_${page.pageNumber}`);
+        batch.set(pageDocRef, page);
+      });
+      
+      await batch.commit();
 
       setPdfPages(pages);
       setExtractStatus('اكتملت المعالجة والمزامنة بنجاح!');
     } catch (err) {
-      console.error(err);
-      setError('فشل استخراج النص من الملف. تأكد أن الملف بصيغة PDF صحيحة.');
+      console.error("Upload error:", err);
+      setError('فشل في معالجة أو مزامنة الملف مع الخادم. ربما يكون الملف كبيراً جداً أو هناك مشكلة في الاتصال.');
     } finally {
       setTimeout(() => setIsExtracting(false), 800);
     }
@@ -307,11 +362,13 @@ export default function App() {
 
   // Handle Search
   const handleSearch = async () => {
-    if (!pdfPages) {
-      setError('الرجاء رفع ملف PDF أولاً.');
+    if (!pdfPages || pdfPages.length === 0) {
+      setError('بيانات الملف غير متوفرة بعد. يرجى الانتظار حتى اكتمال المزامنة أو إعادة رفع الملف.');
       return;
     }
     if (!searchQuery.trim()) return;
+
+    console.log("Starting Search for:", searchQuery, "with", pdfPages.length, "pages");
 
     setIsSearching(true);
     setSearchStage('تهيئة محرك البحث الذكي...');
@@ -927,39 +984,68 @@ export default function App() {
                           )}
                         </div>
                       ) : (
-                        <div className="bg-emerald-50/50 border-2 border-emerald-100 rounded-3xl p-6 flex items-center justify-between group">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/10 border border-emerald-100">
-                              <CheckCircle className="w-7 h-7 text-emerald-500" />
+                        <div className="flex flex-col gap-4">
+                          <div className={`border-2 rounded-3xl p-6 flex items-center justify-between group transition-all ${!originalFile ? 'bg-orange-50/50 border-orange-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
+                            <div className="flex items-center gap-4">
+                              <div className={`w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg border ${!originalFile ? 'text-orange-500 border-orange-100' : 'text-emerald-500 border-emerald-100'}`}>
+                                {!originalFile ? <AlertCircle className="w-7 h-7" /> : <CheckCircle className="w-7 h-7" />}
+                              </div>
+                              <div className="overflow-hidden">
+                                <p className="text-sm font-black text-brand-navy line-clamp-1 truncate max-w-[150px]">{fileName}</p>
+                                <p className={`text-[10px] uppercase font-mono font-bold tracking-widest mt-0.5 ${!originalFile ? 'text-orange-500' : 'text-emerald-500'}`}>
+                                  {!originalFile ? 'LOCAL_FILE_MISSING' : 'SYNC_ACTIVE'}
+                                </p>
+                              </div>
                             </div>
-                            <div className="overflow-hidden">
-                              <p className="text-sm font-black text-brand-navy line-clamp-1 truncate max-w-[150px]">{fileName}</p>
-                              <p className="text-[10px] uppercase font-mono text-emerald-500 font-bold tracking-widest mt-0.5">READY_FOR_EXTRACTION</p>
+                            <div className="flex gap-2">
+                                {!originalFile && (
+                                  <label className="px-4 py-2 bg-brand-navy text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-gold hover:text-brand-navy transition-all shadow-sm cursor-pointer flex items-center gap-2">
+                                     <Upload className="w-3.5 h-3.5" />
+                                     ربط الملف
+                                     <input type="file" className="hidden" accept="application/pdf" onChange={(e) => handleFileUpload(e, true)} />
+                                  </label>
+                                )}
+                                <button 
+                                  onClick={async () => { 
+                                    setPdfPages(null); 
+                                    setSearchResult(null); 
+                                    setOriginalFile(null); 
+                                    // Clear from Firestore too
+                                    const pdfDataRef = doc(db, 'config', 'pdf_data');
+                                    await setDoc(pdfDataRef, { pages: null, fileName: null });
+                                  }}
+                                  className="px-4 py-2 bg-white border border-red-50 text-red-500 rounded-xl text-[10px] font-black uppercase hover:bg-red-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  إسقاط الكشف
+                                </button>
                             </div>
                           </div>
-                          <button 
-                            onClick={() => { setPdfPages(null); setSearchResult(null); setOriginalFile(null); }}
-                            className="px-4 py-2 bg-white border border-red-50 text-red-500 rounded-xl text-[10px] font-black uppercase hover:bg-red-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            إلغاء الملف
-                          </button>
+                          {!originalFile && (
+                            <p className="text-[10px] text-orange-600 font-bold px-2">
+                              * ملاحظة: البيانات مسترجعة من الخادم ولكن طباعة "الأصل" تتطلب اختيار الملف من جهازك مرة أخرى.
+                            </p>
+                          )}
                         </div>
                       )
                     ) : (
                       // Regular User View
                       fileName ? (
-                        <div className="bg-emerald-50/50 border-2 border-emerald-100 rounded-3xl p-6">
+                        <div className={`border-2 rounded-3xl p-6 transition-all ${!pdfPages || pdfPages.length === 0 ? 'bg-red-50 border-red-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
                            <div className="flex items-center gap-5">
-                              <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl border border-emerald-100 rotate-3">
-                                 <FileText className="w-8 h-8 text-brand-navy" />
+                              <div className={`w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl border rotate-3 ${!pdfPages || pdfPages.length === 0 ? 'border-red-100' : 'border-emerald-100'}`}>
+                                 {!pdfPages || pdfPages.length === 0 ? <AlertCircle className="w-8 h-8 text-red-500" /> : <FileText className="w-8 h-8 text-brand-navy" />}
                               </div>
                               <div className="flex-1 overflow-hidden">
-                                 <span className="block text-[10px] text-emerald-600 font-black uppercase tracking-widest mb-1">Active Scan Document</span>
+                                 <span className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${!pdfPages || pdfPages.length === 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                                   {!pdfPages || pdfPages.length === 0 ? 'خطأ في مزامنة البيانات' : 'Active Scan Document'}
+                                 </span>
                                  <h4 className="text-brand-navy font-black text-lg truncate">{fileName}</h4>
                                  <div className="flex items-center gap-2 mt-2">
-                                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></div>
-                                    <span className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Synced with server | {lastUploadedBy}</span>
+                                    <div className={`w-2 h-2 rounded-full ${!pdfPages || pdfPages.length === 0 ? 'bg-red-500' : 'bg-emerald-500 animate-ping'}`}></div>
+                                    <span className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">
+                                      {!pdfPages || pdfPages.length === 0 ? 'يرجى الطلب من المدير إعادة رفع الملف' : `Synced with server | ${lastUploadedBy}`}
+                                    </span>
                                  </div>
                               </div>
                            </div>
@@ -1105,6 +1191,7 @@ export default function App() {
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
                       className="bg-white shadow-2xl rounded-[2.5rem] overflow-hidden border-2 border-brand-navy/5 flex flex-col h-full relative"
+                      id="printable-card"
                     >
                       <div className="absolute top-0 right-0 w-32 h-32 bg-brand-gold/5 rounded-bl-[5rem] -z-0"></div>
                       
@@ -1223,24 +1310,25 @@ export default function App() {
 
                       <div className="p-8 md:p-10 bg-brand-navy/[0.02] border-t-2 border-gray-100 flex flex-col md:flex-row gap-5 relative z-10 backdrop-blur-sm">
                         <button 
-                          disabled={printingPage || !originalFile}
-                          className={`flex-1 py-5 rounded-2xl font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-xl disabled:opacity-50 ${
+                          disabled={printingPage}
+                          className={`flex-1 py-5 rounded-2xl font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-xl ${
                             !originalFile 
-                            ? 'bg-gray-100 text-gray-400 border-2 border-transparent border-dashed cursor-not-allowed' 
+                            ? 'bg-gray-50 text-gray-400 border-2 border-transparent border-dashed cursor-not-allowed opacity-60' 
                             : 'bg-white border-2 border-brand-navy text-brand-navy hover:bg-brand-navy hover:text-white shadow-brand-navy/5'
                           }`}
-                          onClick={printOriginalPage}
-                          title={!originalFile ? "خيار طباعة الصفحة بصيغتها الأصلية متاح فقط للمدير الذي قام برفع الملف الحالي" : ""}
+                          onClick={() => {
+                            if (originalFile) printOriginalPage();
+                          }}
                         >
                           {printingPage ? <Loader2 className="w-5 h-5 animate-spin" /> : <Printer className="w-5 h-5" />}
-                          {originalFile ? 'طباعة الصفحة الأصلية' : 'الطباعة الأصلية غير متاحة'}
+                          {originalFile ? 'طباعة الأصل' : 'الأصل غير متاح'}
                         </button>
                         <button 
-                          className="flex-[2] bg-brand-navy text-brand-gold py-5 rounded-2xl font-black hover:scale-[1.02] hover:shadow-2xl hover:shadow-brand-navy/30 uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-2xl shadow-brand-navy/20 border-2 border-brand-gold/30"
                           onClick={confirmDelivery}
+                          className="flex-[2] bg-brand-navy text-brand-gold py-5 rounded-2xl font-black hover:scale-[1.02] hover:shadow-2xl hover:shadow-brand-navy/30 uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-2xl shadow-brand-navy/20 border-2 border-brand-gold/30"
                         >
                           <CheckCircle className="w-6 h-6" />
-                          تأكيد البيانات والأرشفة
+                          تأكيد وأرشفة
                         </button>
                       </div>
                     </motion.section>
