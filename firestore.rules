@@ -17,7 +17,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isEmailVerified() && (
-        request.auth.token.email == 'ahmad.abduljalil.sy@gmail.com' ||
+        request.auth.token.email in ['ahmad.abduljalil.sy@gmail.com', 'ahmad.abduljalilmunawwara@gmail.com'] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
@@ -44,7 +44,7 @@ service cloud.firestore {
                       isValidUser(request.resource.data) &&
                       (
                         (request.resource.data.status == 'pending' && request.resource.data.role == 'user') ||
-                        (request.auth.token.email == 'ahmad.abduljalil.sy@gmail.com' && request.resource.data.status == 'approved' && request.resource.data.role == 'admin')
+                        (request.auth.token.email in ['ahmad.abduljalil.sy@gmail.com', 'ahmad.abduljalilmunawwara@gmail.com'] && request.resource.data.status == 'approved' && request.resource.data.role == 'admin')
                       );
                       
       allow update: if isAdmin() || (
@@ -66,6 +66,11 @@ service cloud.firestore {
 
     match /config/appearance {
       allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /config/pdf_data {
+      allow read: if isApproved() || isAdmin();
       allow write: if isAdmin();
     }
   }

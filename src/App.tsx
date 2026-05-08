@@ -87,7 +87,10 @@ enum Tab {
 }
 
 // --- Constants ---
-const ADMIN_EMAIL = 'ahmad.abduljalil.sy@gmail.com';
+const ADMIN_EMAILS = [
+  'ahmad.abduljalil.sy@gmail.com',
+  'ahmad.abduljalilmunawwara@gmail.com'
+];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>(Tab.EXTRACT);
@@ -100,6 +103,7 @@ export default function App() {
   const [pdfPages, setPdfPages] = useState<PDFPage[] | null>(null);
   const [originalFile, setOriginalFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [lastUploadedBy, setLastUploadedBy] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractProgress, setExtractProgress] = useState(0);
   const [extractStatus, setExtractStatus] = useState<string>('');
@@ -147,10 +151,22 @@ export default function App() {
           }
           
           if (userDoc.exists()) {
-            setUserData(userDoc.data() as AppUser);
+            const currentData = userDoc.data() as AppUser;
+            const userEmail = firebaseUser.email?.toLowerCase() || '';
+            const isTargetAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === userEmail);
+            
+            // Auto-promote if in the list but not admin
+            if (isTargetAdmin && currentData.role !== 'admin') {
+              const updatedData = { ...currentData, role: 'admin' as const, status: 'approved' as const };
+              await setDoc(userDocRef, updatedData, { merge: true });
+              setUserData(updatedData);
+            } else {
+              setUserData(currentData);
+            }
           } else {
             // New User
-            const isDefaultAdmin = firebaseUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+            const userEmail = firebaseUser.email?.toLowerCase() || '';
+            const isDefaultAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === userEmail);
             const newUserData: AppUser = {
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
@@ -209,6 +225,25 @@ export default function App() {
     return () => unsubscribe();
   }, [userData]);
 
+  // Global PDF Data Sync
+  useEffect(() => {
+    if (!userData || userData.status !== 'approved') return;
+
+    const pdfDataRef = doc(db, 'config', 'pdf_data');
+    const unsubscribe = onSnapshot(pdfDataRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setPdfPages(data.pages || null);
+        setFileName(data.fileName || null);
+        setLastUploadedBy(data.uploadedByEmail || null);
+      }
+    }, (err) => {
+      console.warn("Global PDF data sync restriction:", err);
+    });
+
+    return () => unsubscribe();
+  }, [userData]);
+
   // Appearance Sync
   useEffect(() => {
     const configRef = doc(db, 'config', 'appearance');
@@ -249,8 +284,19 @@ export default function App() {
         else if (p < 90) setExtractStatus('تحسين جودة البيانات المستخرجة...');
         else setExtractStatus('جارِ الانتهاء من المعالجة...');
       });
+      
+      // Save to Firestore so everyone can see it
+      const pdfDataRef = doc(db, 'config', 'pdf_data');
+      await setDoc(pdfDataRef, {
+        pages,
+        fileName: file.name,
+        uploadedAt: serverTimestamp(),
+        uploadedBy: user?.uid,
+        uploadedByEmail: user?.email
+      });
+
       setPdfPages(pages);
-      setExtractStatus('اكتملت المعالجة بنجاح!');
+      setExtractStatus('اكتملت المعالجة والمزامنة بنجاح!');
     } catch (err) {
       console.error(err);
       setError('فشل استخراج النص من الملف. تأكد أن الملف بصيغة PDF صحيحة.');
@@ -804,99 +850,128 @@ export default function App() {
                   <div className="bg-white rounded-[2rem] p-8 shadow-xl shadow-brand-navy/5 border border-white/60">
                     <h3 className="text-sm font-black text-brand-navy uppercase tracking-[0.2em] mb-6 flex items-center gap-3">
                       <div className="w-2 h-6 bg-brand-gold rounded-full"></div>
-                      تغذية النظام بالبيانات
+                      {userData?.role === 'admin' ? 'تحديث قاعدة البيانات' : 'قاعدة البيانات المزامنة'}
                     </h3>
 
-                    {!pdfPages ? (
-                      <div className="space-y-6">
-                        <label className={`relative block border-4 border-dashed rounded-[2.5rem] cursor-pointer transition-all duration-500 overflow-hidden ${
-                          isExtracting 
-                          ? 'h-64 border-brand-gold bg-brand-navy/[0.03]' 
-                          : 'h-48 border-brand-navy/10 hover:border-brand-gold bg-brand-navy/[0.01] group'
-                        }`}>
-                          <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-                            <AnimatePresence mode="wait">
-                              {isExtracting ? (
-                                <motion.div 
-                                  key="processing"
-                                  initial={{ scale: 0.8, opacity: 0 }}
-                                  animate={{ scale: 1, opacity: 1 }}
-                                  exit={{ scale: 1.2, opacity: 0 }}
-                                  className="flex flex-col items-center w-full max-w-sm"
-                                >
-                                  <div className="w-16 h-16 bg-brand-gold rounded-full flex items-center justify-center shadow-xl mb-6 animate-pulse">
-                                    <Loader2 className="w-8 h-8 text-brand-navy animate-spin" />
-                                  </div>
-                                  <div className="w-full space-y-3">
-                                    <div className="flex justify-between items-end">
-                                      <span className="text-[10px] font-black text-brand-navy uppercase tracking-widest">{extractStatus}</span>
-                                      <span className="text-sm font-mono font-black text-brand-gold">{extractProgress}%</span>
+                    {userData?.role === 'admin' ? (
+                      // Admin Upload Interface
+                      !pdfPages ? (
+                        <div className="space-y-6">
+                          <label className={`relative block border-4 border-dashed rounded-[2.5rem] cursor-pointer transition-all duration-500 overflow-hidden ${
+                            isExtracting 
+                            ? 'h-64 border-brand-gold bg-brand-navy/[0.03]' 
+                            : 'h-48 border-brand-navy/10 hover:border-brand-gold bg-brand-navy/[0.01] group'
+                          }`}>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
+                              <AnimatePresence mode="wait">
+                                {isExtracting ? (
+                                  <motion.div 
+                                    key="processing"
+                                    initial={{ scale: 0.8, opacity: 0 }}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    exit={{ scale: 1.2, opacity: 0 }}
+                                    className="flex flex-col items-center w-full max-w-sm"
+                                  >
+                                    <div className="w-16 h-16 bg-brand-gold rounded-full flex items-center justify-center shadow-xl mb-6 animate-pulse">
+                                      <Loader2 className="w-8 h-8 text-brand-navy animate-spin" />
                                     </div>
-                                    <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden border border-gray-200">
-                                      <motion.div 
-                                        className="h-full bg-brand-gold"
-                                        initial={{ width: 0 }}
-                                        animate={{ width: `${extractProgress}%` }}
-                                        transition={{ duration: 0.3 }}
-                                      />
+                                    <div className="w-full space-y-3">
+                                      <div className="flex justify-between items-end">
+                                        <span className="text-[10px] font-black text-brand-navy uppercase tracking-widest">{extractStatus}</span>
+                                        <span className="text-sm font-mono font-black text-brand-gold">{extractProgress}%</span>
+                                      </div>
+                                      <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden border border-gray-200">
+                                        <motion.div 
+                                          className="h-full bg-brand-gold"
+                                          initial={{ width: 0 }}
+                                          animate={{ width: `${extractProgress}%` }}
+                                          transition={{ duration: 0.3 }}
+                                        />
+                                      </div>
+                                      <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">AI Processing Engine Active</p>
                                     </div>
-                                    <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">AI Processing Engine Active</p>
-                                  </div>
-                                </motion.div>
-                              ) : (
-                                <motion.div 
-                                  key="idle"
-                                  initial={{ y: 10, opacity: 0 }}
-                                  animate={{ y: 0, opacity: 1 }}
-                                  className="flex flex-col items-center"
-                                >
-                                  <div className="w-16 h-16 bg-white border-2 border-brand-navy/5 rounded-2xl flex items-center justify-center shadow-lg mb-4 group-hover:scale-110 group-hover:rotate-3 transition-all duration-500">
-                                    <Upload className="w-8 h-8 text-brand-navy group-hover:text-brand-gold" />
-                                  </div>
-                                  <h4 className="text-lg font-black text-brand-navy mb-1">رفع كشوفات الـ PDF الأصلية</h4>
-                                  <p className="text-xs text-gray-400 font-medium">قم بسحب الملف هنا أو اضغط للاختيار</p>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                          <input type="file" className="hidden" accept="application/pdf" onChange={handleFileUpload} disabled={isExtracting} />
-                        </label>
-                        
-                        {isExtracting && (
-                          <motion.div 
-                             initial={{ opacity: 0, y: 10 }}
-                             animate={{ opacity: 1, y: 0 }}
-                             className="flex items-center gap-3 bg-brand-navy p-4 rounded-2xl shadow-xl border-l-4 border-brand-gold"
-                          >
-                             <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center">
-                                <FileText className="w-5 h-5 text-brand-gold animate-bounce" />
-                             </div>
-                             <div>
-                                <p className="text-white text-xs font-black">جاري المعالجة الرقمية للملف: <span className="text-brand-gold">{fileName}</span></p>
-                                <p className="text-white/40 text-[9px] font-bold uppercase tracking-widest mt-0.5">Vectorizing & Indexing Content...</p>
-                             </div>
-                          </motion.div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="bg-emerald-50/50 border-2 border-emerald-100 rounded-3xl p-6 flex items-center justify-between group">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/10 border border-emerald-100">
-                            <CheckCircle className="w-7 h-7 text-emerald-500" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-black text-brand-navy line-clamp-1">{fileName}</p>
-                            <p className="text-[10px] uppercase font-mono text-emerald-500 font-bold tracking-widest mt-0.5">READY_FOR_EXTRACTION</p>
-                          </div>
+                                  </motion.div>
+                                ) : (
+                                  <motion.div 
+                                    key="idle"
+                                    initial={{ y: 10, opacity: 0 }}
+                                    animate={{ y: 0, opacity: 1 }}
+                                    className="flex flex-col items-center"
+                                  >
+                                    <div className="w-16 h-16 bg-white border-2 border-brand-navy/5 rounded-2xl flex items-center justify-center shadow-lg mb-4 group-hover:scale-110 group-hover:rotate-3 transition-all duration-500">
+                                      <Upload className="w-8 h-8 text-brand-navy group-hover:text-brand-gold" />
+                                    </div>
+                                    <h4 className="text-lg font-black text-brand-navy mb-1">رفع كشوفات الـ PDF الأصلية</h4>
+                                    <p className="text-xs text-gray-400 font-medium">قم بسحب الملف هنا أو اضغط للاختيار</p>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                            <input type="file" className="hidden" accept="application/pdf" onChange={handleFileUpload} disabled={isExtracting} />
+                          </label>
+                          
+                          {isExtracting && (
+                            <motion.div 
+                               initial={{ opacity: 0, y: 10 }}
+                               animate={{ opacity: 1, y: 0 }}
+                               className="flex items-center gap-3 bg-brand-navy p-4 rounded-2xl shadow-xl border-l-4 border-brand-gold"
+                            >
+                               <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center">
+                                  <FileText className="w-5 h-5 text-brand-gold animate-bounce" />
+                               </div>
+                               <div>
+                                  <p className="text-white text-xs font-black">جاري المعالجة الرقمية للملف: <span className="text-brand-gold">{fileName}</span></p>
+                                  <p className="text-white/40 text-[9px] font-bold uppercase tracking-widest mt-0.5">Vectorizing & Indexing Content...</p>
+                               </div>
+                            </motion.div>
+                          )}
                         </div>
-                        <button 
-                          onClick={() => { setPdfPages(null); setSearchResult(null); setOriginalFile(null); }}
-                          className="px-4 py-2 bg-white border border-red-50 text-red-500 rounded-xl text-[10px] font-black uppercase hover:bg-red-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          إلغاء الملف
-                        </button>
-                      </div>
+                      ) : (
+                        <div className="bg-emerald-50/50 border-2 border-emerald-100 rounded-3xl p-6 flex items-center justify-between group">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/10 border border-emerald-100">
+                              <CheckCircle className="w-7 h-7 text-emerald-500" />
+                            </div>
+                            <div className="overflow-hidden">
+                              <p className="text-sm font-black text-brand-navy line-clamp-1 truncate max-w-[150px]">{fileName}</p>
+                              <p className="text-[10px] uppercase font-mono text-emerald-500 font-bold tracking-widest mt-0.5">READY_FOR_EXTRACTION</p>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => { setPdfPages(null); setSearchResult(null); setOriginalFile(null); }}
+                            className="px-4 py-2 bg-white border border-red-50 text-red-500 rounded-xl text-[10px] font-black uppercase hover:bg-red-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            إلغاء الملف
+                          </button>
+                        </div>
+                      )
+                    ) : (
+                      // Regular User View
+                      fileName ? (
+                        <div className="bg-emerald-50/50 border-2 border-emerald-100 rounded-3xl p-6">
+                           <div className="flex items-center gap-5">
+                              <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl border border-emerald-100 rotate-3">
+                                 <FileText className="w-8 h-8 text-brand-navy" />
+                              </div>
+                              <div className="flex-1 overflow-hidden">
+                                 <span className="block text-[10px] text-emerald-600 font-black uppercase tracking-widest mb-1">Active Scan Document</span>
+                                 <h4 className="text-brand-navy font-black text-lg truncate">{fileName}</h4>
+                                 <div className="flex items-center gap-2 mt-2">
+                                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></div>
+                                    <span className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Synced with server | {lastUploadedBy}</span>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                      ) : (
+                        <div className="p-10 bg-gray-50/50 border-4 border-dashed border-gray-100 rounded-[2.5rem] text-center">
+                           <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                              <Clock className="w-8 h-8 text-gray-200 animate-pulse" />
+                           </div>
+                           <p className="text-gray-400 font-bold text-sm">بانتظار قيام المدير برفع كشف الـ PDF اليومي للبدء في عمليات المطابقة...</p>
+                        </div>
+                      )
                     )}
                   </div>
                 </div>
@@ -1148,12 +1223,17 @@ export default function App() {
 
                       <div className="p-8 md:p-10 bg-brand-navy/[0.02] border-t-2 border-gray-100 flex flex-col md:flex-row gap-5 relative z-10 backdrop-blur-sm">
                         <button 
-                          disabled={printingPage}
-                          className="flex-1 bg-white border-2 border-brand-navy text-brand-navy py-5 rounded-2xl font-black hover:bg-brand-navy hover:text-white uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-xl shadow-brand-navy/5 disabled:opacity-50"
+                          disabled={printingPage || !originalFile}
+                          className={`flex-1 py-5 rounded-2xl font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-xl disabled:opacity-50 ${
+                            !originalFile 
+                            ? 'bg-gray-100 text-gray-400 border-2 border-transparent border-dashed cursor-not-allowed' 
+                            : 'bg-white border-2 border-brand-navy text-brand-navy hover:bg-brand-navy hover:text-white shadow-brand-navy/5'
+                          }`}
                           onClick={printOriginalPage}
+                          title={!originalFile ? "خيار طباعة الصفحة بصيغتها الأصلية متاح فقط للمدير الذي قام برفع الملف الحالي" : ""}
                         >
                           {printingPage ? <Loader2 className="w-5 h-5 animate-spin" /> : <Printer className="w-5 h-5" />}
-                          طباعة الصفحة الأصلية
+                          {originalFile ? 'طباعة الصفحة الأصلية' : 'الطباعة الأصلية غير متاحة'}
                         </button>
                         <button 
                           className="flex-[2] bg-brand-navy text-brand-gold py-5 rounded-2xl font-black hover:scale-[1.02] hover:shadow-2xl hover:shadow-brand-navy/30 uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-2xl shadow-brand-navy/20 border-2 border-brand-gold/30"
@@ -1344,7 +1424,7 @@ export default function App() {
                                 قبول الطلب
                               </button>
                             )}
-                            {u.email !== ADMIN_EMAIL && (
+                            {!ADMIN_EMAILS.some(e => e.toLowerCase() === u.email.toLowerCase()) && (
                               <button 
                                 onClick={() => setUserRecordToDelete(u)}
                                 className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl text-xs font-black hover:bg-red-600 hover:text-white transition-all shadow-sm group"
